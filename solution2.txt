@@ -1,0 +1,100 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import LinearRegression
+from sklearn import svm
+from sklearn import tree
+from sklearn.naive_bayes import GaussianNB
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from sklearn.model_selection import GridSearchCV
+pd.options.mode.chained_assignment = None  # default='warn'
+from google.colab import drive
+!pip install ipython-autotime
+%load_ext autotime
+
+drive.mount('/content/drive')
+TRAINING_DIR = "/content/drive/MyDrive/cnc_tool_wear/train.csv"
+training_data = pd.read_csv(TRAINING_DIR)
+
+# Replace null inspection values values with 'no'
+training_data['passed_visual_inspection'] = training_data['passed_visual_inspection'].fillna('no')
+
+frames = []
+for i in range(1,19):
+    experiment_number = '0' + str(i) if i < 10 else str(i)
+    frame = pd.read_csv("/content/drive/MyDrive/cnc_tool_wear/experiment_{}.csv".format(experiment_number))
+
+    # Get the current applicable training data record
+    experiment_result_row = training_data[training_data['No'] == i]
+
+    # Append the applicable training values to the end of each record
+    frame['material'] = experiment_result_row.iloc[0]['material']
+    frame['Feedrate'] = experiment_result_row.iloc[0]['feedrate']
+    frame['Clamp Pressure'] = experiment_result_row.iloc[0]['clamp_pressure']
+
+    frame['Tool Condition'] = experiment_result_row.iloc[0]['tool_condition']
+    frame['Machining Finalised'] = experiment_result_row.iloc[0]['machining_finalized']
+    frame['Passed Visual Inspection'] = experiment_result_row.iloc[0]['passed_visual_inspection']
+
+    frames.append(frame)
+
+# Concatenate experiments into a single dataframe
+dataframe = pd.concat(frames, ignore_index=True)
+dataframe.drop(['Z1_CurrentFeedback','Z1_DCBusVoltage','Z1_OutputCurrent','Z1_OutputVoltage','S1_SystemInertia'],
+               axis=1, inplace=True)
+dataframe.replace({'Machining_Process': {'Starting':'Prep','end':'End'}}, inplace=True)
+
+# Setup a dataframe of features and ensure each record is in a suitable format
+feature_dataframe = dataframe.copy()
+feature_dataframe['Machining_Process'] = LabelEncoder().fit_transform(feature_dataframe['Machining_Process']).astype(np.int8)
+feature_dataframe['Tool Condition'] = LabelEncoder().fit_transform(feature_dataframe['Tool Condition']).astype(np.int8)
+feature_dataframe['Machining Finalised'] = LabelEncoder().fit_transform(feature_dataframe['Machining Finalised']).astype(np.int8)
+feature_dataframe['Passed Visual Inspection'] = LabelEncoder().fit_transform(feature_dataframe['Passed Visual Inspection']).astype(np.int8)
+feature_dataframe.drop(['material'], axis=1, inplace=True)
+
+# Initialise models
+SVC_model = svm.SVC()
+DT_model = tree.DecisionTreeClassifier()
+GNB_model = GaussianNB()
+KNN_model = KNeighborsClassifier()
+
+# Initialise parameters
+SVC_parameters = {'C':[0.1, 1, 10, 20, 50, 100], 'random_state': [8, 28, 38, 48, 58, 68, 78, 88]}
+DT_parameters = {'ccp_alpha': [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06], 'splitter': ['best', 'random'], 'criterion': ['gini', 'entropy'],'random_state': [8, 28, 38, 48, 58, 68, 78, 88]}
+GNB_parameters = {'var_smoothing': [1e-2, 1e-3, 1e-5, 1e-7, 1e-9, 1e-11]}
+KNN_parameters = {'n_neighbors': [3, 4, 5, 6], 'algorithm': ['auto', 'brute', 'ball_tree'], 'weights': ['uniform', 'distance']}
+
+# Find optimal parameters for each model
+SVC = GridSearchCV(SVC_model, SVC_parameters)
+DT = GridSearchCV(DT_model, DT_parameters)
+GNB = GridSearchCV(GNB_model, GNB_parameters)
+KNN = GridSearchCV(KNN_model, KNN_parameters)
+
+condition_y = feature_dataframe['Tool Condition']
+condition_X = feature_dataframe.drop(['Tool Condition', 'Machining Finalised', 'Passed Visual Inspection'], axis=1)
+X_train, X_test, y_train, y_test = train_test_split(condition_X, condition_y, train_size=0.7, random_state=28, stratify=condition_y)
+
+DT.fit(X_train, y_train)
+DT_condition_prediction = DT.predict(X_test)
+print(accuracy_score(y_test, DT_condition_prediction))
+print(DT.best_estimator_)
+
+KNN.fit(X_train, y_train)
+KNN_condition_prediction = KNN.predict(X_test)
+print(accuracy_score(y_test, KNN_condition_prediction))
+print(KNN.best_estimator_)
+
+GNB.fit(X_train, y_train)
+GNB_condition_prediction = GNB.predict(X_test)
+print(accuracy_score(y_test, GNB_condition_prediction))
+print(GNB.best_estimator_)
+
+SVC.fit(X_train, y_train)
+SVC_condition_prediction = SVC.predict(X_test)
+print(accuracy_score(y_test, SVC_condition_prediction))
+print(SVC.best_estimator_)

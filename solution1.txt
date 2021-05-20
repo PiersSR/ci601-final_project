@@ -1,1 +1,225 @@
-test
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import LinearRegression
+from sklearn import svm
+from sklearn import tree
+from sklearn.naive_bayes import GaussianNB
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from sklearn.model_selection import GridSearchCV
+pd.options.mode.chained_assignment = None  # default='warn'
+from google.colab import drive
+!pip install ipython-autotime
+%load_ext autotime
+
+drive.mount('/content/drive')
+TRAINING_DIR = "/content/drive/MyDrive/cnc_tool_wear/train.csv"
+training_data = pd.read_csv(TRAINING_DIR)
+
+# Transform string values into numeric values
+tool_encoder = LabelEncoder()
+tool_encoder.fit(training_data['tool_condition'])
+training_data['Encoded Tool Condition'] = tool_encoder.transform(training_data['tool_condition'])
+
+feedrate_encoder = LabelEncoder()
+feedrate_encoder.fit(training_data['feedrate'])
+training_data['Encoded Feedrate'] = feedrate_encoder.transform(training_data['feedrate'])
+
+pressure_encoder = LabelEncoder()
+pressure_encoder.fit(training_data['clamp_pressure'])
+training_data['Encoded Clamp Pressure'] = pressure_encoder.transform(training_data['clamp_pressure'])
+
+training_data.drop(['passed_visual_inspection','tool_condition','material','machining_finalized'], axis=1, inplace=True)
+
+#Concatenate experiments into a single dataframe
+frames = []
+for i in range(1,19):
+    ex_num = '0' + str(i) if i < 10 else str(i)
+    frame = pd.read_csv("/content/drive/MyDrive/cnc_tool_wear/experiment_{}.csv".format(ex_num))
+
+    ex_result_row = training_data[training_data['No'] == i]
+
+    machining_encoder = LabelEncoder()
+    machining_encoder.fit(frame['Machining_Process'])
+    frame['Encoded Machining Process'] = machining_encoder.transform(frame['Machining_Process'])
+
+    frame['Encoded Feedrate'] = ex_result_row.iloc[0]['Encoded Feedrate']
+    frame['Encoded Clamp Pressure'] = ex_result_row.iloc[0]['Encoded Clamp Pressure']
+    frames.append(frame)
+
+dataframe = pd.concat(frames, ignore_index=True)
+dataframe.drop(['Z1_CurrentFeedback','Z1_DCBusVoltage','Z1_OutputCurrent','Z1_OutputVoltage','S1_SystemInertia'],
+               axis=1, inplace=True)
+
+correlations = dataframe.corr()
+
+#Take the relevant feedrate features and create a new dataframe to contain them
+correlated_feedrate = abs(correlations["Encoded Feedrate"])
+relevant_feedrate_features = correlated_feedrate[correlated_feedrate > 0.3]
+#print(relevant_feedrate_features)
+
+feedrate_dataframe = dataframe[['X1_ActualPosition', 'X1_CommandPosition', 'Y1_ActualPosition', 'Y1_CommandPosition',
+                  'Z1_ActualPosition', 'Z1_CommandPosition', 'S1_ActualVelocity', 'S1_CommandVelocity',
+                  'S1_CurrentFeedback', 'S1_DCBusVoltage', 'S1_OutputVoltage', 'S1_OutputPower', 'M1_sequence_number',
+                  'M1_CURRENT_FEEDRATE', 'Encoded Feedrate']]
+
+#Take the relevant clamp pressure features and create a new dataframe to contain them
+correlated_clamp_pressure = abs(correlations["Encoded Clamp Pressure"])
+relevant_pressure_features = correlated_clamp_pressure[correlated_clamp_pressure > 0.1]
+#print(relevant_pressure_features)
+
+pressure_dataframe = dataframe[['X1_ActualPosition', 'X1_CommandPosition', 'X1_OutputCurrent', 'Y1_ActualPosition',
+                  'Y1_CommandPosition', 'Y1_OutputCurrent', 'Z1_ActualPosition', 'Z1_CommandPosition',
+                  'S1_ActualVelocity', 'S1_CommandVelocity', 'S1_OutputVoltage', 'M1_CURRENT_FEEDRATE',
+                  'Encoded Clamp Pressure']]
+
+# Create np arrays and split train/test sets
+feedrate_y = feedrate_dataframe["Encoded Feedrate"]
+feedrate_X = feedrate_dataframe.drop(["Encoded Feedrate"], axis=1)
+
+feedrate_X_train, feedrate_X_test, feedrate_y_train, feedrate_y_test = train_test_split(feedrate_X, feedrate_y, 
+                                                                                        train_size=0.8, random_state=28)
+
+pressure_y = pressure_dataframe["Encoded Clamp Pressure"]
+pressure_X = pressure_dataframe.drop(["Encoded Clamp Pressure"], axis=1)
+
+pressure_X_train, pressure_X_test, pressure_y_train, pressure_y_test = train_test_split(pressure_X, pressure_y,
+                                                                                        train_size=0.8, random_state=28)
+
+SVC = svm.SVC()
+DT = tree.DecisionTreeClassifier()
+GNB = GaussianNB()
+KNN = KNeighborsClassifier()
+
+SVC_parameters = {'C':[0.1, 1, 10, 20, 50, 100], 'random_state': [8, 28, 38, 48, 58, 68, 78, 88]}
+DT_parameters = {'ccp_alpha': [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06], 'splitter': ['best', 'random'], 'criterion': ['gini', 'entropy'],'random_state': [8, 28, 38, 48, 58, 68, 78, 88]}
+GNB_parameters = {'var_smoothing': [1e-2, 1e-3, 1e-5, 1e-7, 1e-9, 1e-11]}
+KNN_parameters = {'n_neighbors': [3, 4, 5, 6], 'algorithm': ['auto', 'brute', 'ball_tree'], 'weights': ['uniform', 'distance']}
+
+SVC_feedrate = GridSearchCV(SVC, SVC_parameters)
+DT_feedrate = GridSearchCV(DT, DT_parameters)
+GNB_feedrate = GridSearchCV(GNB, GNB_parameters)
+KNN_feedrate = GridSearchCV(KNN, KNN_parameters)
+
+SVC_pressure = GridSearchCV(SVC, SVC_parameters)
+DT_pressure = GridSearchCV(DT, DT_parameters)
+GNB_pressure = GridSearchCV(GNB, GNB_parameters)
+KNN_pressure = GridSearchCV(KNN, KNN_parameters)
+
+SVC_condition = GridSearchCV(SVC, SVC_parameters)
+DT_condition = GridSearchCV(DT, DT_parameters)
+GNB_condition = GridSearchCV(GNB, GNB_parameters)
+KNN_condition = GridSearchCV(KNN, KNN_parameters)
+
+SVC_feedrate.fit(feedrate_X_train, feedrate_y_train)
+SVC_feedrate_prediction = SVC_feedrate.predict(feedrate_X_test)
+SVC_feedrate_estimator = SVC_feedrate.best_estimator_
+SVC_feedrate_accuracy = (accuracy_score(feedrate_y_test, SVC_feedrate_prediction))
+
+DT_feedrate.fit(feedrate_X_train, feedrate_y_train)
+DT_feedrate_prediction = DT_feedrate.predict(feedrate_X_test)
+DT_feedrate_estimator = DT_feedrate.best_estimator_
+DT_feedrate_accuracy = accuracy_score(feedrate_y_test, DT_feedrate_prediction)
+
+GNB_feedrate.fit(feedrate_X_train, feedrate_y_train)
+GNB_feedrate_prediction = GNB_feedrate.predict(feedrate_X_test)
+GNB_feedrate_estimator = GNB_feedrate.best_estimator_
+GNB_feedrate_accuracy = accuracy_score(feedrate_y_test, GNB_feedrate_prediction)
+
+KNN_feedrate.fit(feedrate_X_train, feedrate_y_train)
+KNN_feedrate_prediction = KNN_feedrate.predict(feedrate_X_test)
+KNN_feedrate_estimator = KNN_feedrate.best_estimator_
+KNN_feedrate_accuracy = accuracy_score(feedrate_y_test, KNN_feedrate_prediction)
+
+SVC_pressure.fit(pressure_X_train, pressure_y_train)
+SVC_pressure_prediction = SVC_pressure.predict(pressure_X_test)
+SVC_pressure_estimator = SVC_pressure.best_estimator_
+SVC_pressure_accuracy = accuracy_score(pressure_y_test, SVC_pressure_prediction)
+
+DT_pressure.fit(pressure_X_train, pressure_y_train)
+DT_pressure_prediction = DT_pressure.predict(pressure_X_test)
+DT_pressure_estimator = DT_pressure.best_estimator_
+DT_pressure_accuracy = accuracy_score(pressure_y_test, DT_pressure_prediction)
+
+GNB_pressure.fit(pressure_X_train, pressure_y_train)
+GNB_pressure_prediction = GNB_pressure.predict(pressure_X_test)
+GNB_pressure_estimator = GNB_pressure.best_estimator_
+GNB_pressure_accuracy = accuracy_score(pressure_y_test, GNB_pressure_prediction)
+
+KNN_pressure.fit(pressure_X_train, pressure_y_train)
+KNN_pressure_prediction = KNN_pressure.predict(pressure_X_test)
+KNN_pressure_estimator = KNN_pressure.best_estimator_
+KNN_pressure_accuracy = accuracy_score(pressure_y_test, KNN_pressure_prediction)
+
+# Initialise dataframe/features/targets to predict tool condition using feedrate and clamp pressure
+condition_dataframe = pd.DataFrame(columns=['Feedrate', 'Clamp Pressure'])
+condition_dataframe['Feedrate'] = DT_feedrate_prediction.tolist()
+condition_dataframe['Clamp Pressure'] = KNN_pressure_prediction.tolist()
+
+condition_y = training_data["Encoded Tool Condition"]
+condition_X = training_data[["Encoded Feedrate", "Encoded Clamp Pressure"]]
+
+condition_X_train, condition_X_test, condition_y_train, condition_y_test = train_test_split(condition_X, condition_y, test_size=0.3, random_state=28)
+
+SVC_condition.fit(condition_X_train, condition_y_train)
+SVC_condition_prediction = SVC_condition.predict(condition_X_test)
+SVC_condition_estimator = SVC_condition.best_estimator_
+SVC_condition_accuracy = accuracy_score(condition_y_test, SVC_condition_prediction)
+
+DT_condition.fit(condition_X_train, condition_y_train)
+DT_condition_prediction = DT_condition.predict(condition_X_test)
+DT_condition_estimator = DT_condition.best_estimator_
+DT_condition_accuracy = accuracy_score(condition_y_test, DT_condition_prediction)
+
+GNB_condition.fit(condition_X_train, condition_y_train)
+GNB_condition_prediction = GNB_condition.predict(condition_X_test)
+GNB_condition_estimator = GNB_condition.best_estimator_
+GNB_condition_accuracy = accuracy_score(condition_y_test, GNB_condition_prediction)
+
+KNN_condition.fit(condition_X_train, condition_y_train)
+KNN_condition_prediction = KNN_condition.predict(condition_X_test)
+KNN_condition_estimator = KNN_condition.best_estimator_
+KNN_condition_accuracy = accuracy_score(condition_y_test, KNN_condition_prediction)
+
+condition_prediction = KNN_condition.predict(condition_dataframe)
+
+result = pd.DataFrame({'Feedrate': condition_dataframe['Feedrate'], 'Clamp Pressure': condition_dataframe['Clamp Pressure'], 'Tool Condition': condition_prediction})
+
+condition_dataframe['Feedrate'] = condition_dataframe['Feedrate'].apply(np.sign).replace({0.0: 3, 0.1: 6, 0.2: 12, 0.3: 15, 0.4:20})
+condition_dataframe['Clamp Pressure'] = condition_dataframe['Clamp Pressure'].apply(np.sign).replace({0.0: 2.5, 0.1: 3.0, 0.2: 4.0})
+
+condition_prediction = condition_prediction.astype(str)
+
+for i in range(len(condition_prediction)):
+    if (condition_prediction[i]=='0'):
+        condition_prediction[i]='unworn'
+    elif (condition_prediction[i]=='1'):
+        condition_prediction[i]='worn'
+
+result = pd.DataFrame({'Feedrate': condition_dataframe['Feedrate'], 'Clamp Pressure': condition_dataframe['Clamp Pressure'], 'Tool Condition': condition_prediction})
+print(result)
+
+#print('=============== SVC Results ===============')
+#print('SVC Feedrate Parameters: %(estimator)s \nSVC Feedrate Accuracy: %(accuracy)s \n' % {"estimator": SVC_feedrate_estimator, "accuracy": SVC_feedrate_accuracy})
+#print('SVC Pressure Parameters: %(estimator)s \nSVC Pressure Accuracy: %(accuracy)s \n' % {"estimator": SVC_pressure_estimator, "accuracy":SVC_pressure_accuracy})
+#print('SVC Condition Parameters: %(estimator)s \nSVC Condition Accuracy: %(accuracy)s \n' % {"estimator": SVC_condition_estimator, "accuracy":SVC_condition_accuracy})
+
+print('=============== Decision Tree Results ===============')
+print('DT Feedrate Parameters: %(estimator)s \nDT Feedrate Accuracy: %(accuracy)s \n' % {"estimator": DT_feedrate_estimator, "accuracy": DT_feedrate_accuracy})
+print('DT Pressure Parameters: %(estimator)s \nDT Pressure Accuracy: %(accuracy)s \n' % {"estimator": DT_pressure_estimator, "accuracy":DT_pressure_accuracy})
+print('DT Condition Parameters: %(estimator)s \nDT Condition Accuracy: %(accuracy)s \n' % {"estimator": DT_condition_estimator, "accuracy":DT_condition_accuracy})
+
+print('=============== Gaussian Naive-Bayes Restuls ===============')
+print('GNB Feedrate Parameters: %(estimator)s \nGNB Feedrate Accuracy: %(accuracy)s \n' % {"estimator": GNB_feedrate_estimator, "accuracy": GNB_feedrate_accuracy})
+print('GNB Pressure Parameters: %(estimator)s \nGNB Pressure Accuracy: %(accuracy)s \n' % {"estimator": GNB_pressure_estimator, "accuracy": GNB_pressure_accuracy})
+print('GNB Condition Parameters: %(estimator)s \nGNB Condition Accuracy: %(accuracy)s \n' % {"estimator": GNB_condition_estimator, "accuracy": GNB_condition_accuracy})
+
+print('=============== K-Nearest Neigbor Results ===============')
+print('KNN Feedrate Parameters: %(estimator)s \nKNN Feedrate Accuracy: %(accuracy)s \n' % {"estimator": KNN_feedrate_estimator, "accuracy": KNN_feedrate_accuracy})
+print('KNN Pressure Parameters: %(estimator)s \nKNN Pressure Accuracy: %(accuracy)s \n' % {"estimator": KNN_pressure_estimator, "accuracy": KNN_pressure_accuracy})
+print('KNN Condition Parameters: %(estimator)s \nKNN Condition Accuracy: %(accuracy)s \n' % {"estimator": KNN_condition_estimator, "accuracy": KNN_condition_accuracy})
